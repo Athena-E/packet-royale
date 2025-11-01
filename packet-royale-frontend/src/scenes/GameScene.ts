@@ -7,6 +7,9 @@ import type { GameState, GameNode, BandwidthStream } from '../types/gameTypes';
 import { generateDummyGameState, updateDummyGameState } from '../utils/dummyData';
 import { hexToPixel, getHexVertices } from '../utils/hexUtils';
 import { COLORS, VISUAL_CONFIG, getPlayerColor, getBandwidthColor } from '../config/visualConstants';
+import { fetchGameState, pingBackend } from '../services/backendApi';
+import { transformBackendToFrontend } from '../adapters/backendAdapter';
+import { getBackendConfig, isBackendEnabled, debugLog, errorLog } from '../config/backend';
 
 export class GameScene extends Phaser.Scene {
   private gameState!: GameState;
@@ -22,6 +25,11 @@ export class GameScene extends Phaser.Scene {
   private dragStartX = 0;
   private dragStartY = 0;
 
+  // Backend integration
+  private useBackend = false;
+  private backendConnected = false;
+  private currentPlayerId = 0; // Default to player 0, can be set from URL params
+
   constructor() {
     super({ key: 'GameScene' });
   }
@@ -35,9 +43,36 @@ export class GameScene extends Phaser.Scene {
     graphics.destroy();
   }
 
-  create() {
+  async create() {
+    // Check if backend is enabled and reachable
+    if (isBackendEnabled()) {
+      debugLog('Checking backend connection...');
+      this.backendConnected = await pingBackend();
+      this.useBackend = this.backendConnected;
+
+      if (this.backendConnected) {
+        debugLog('Backend connected successfully');
+      } else {
+        errorLog('Backend not reachable, falling back to dummy data');
+      }
+    } else {
+      debugLog('Backend disabled, using dummy data');
+    }
+
     // Initialize game state
-    this.gameState = generateDummyGameState();
+    if (this.useBackend) {
+      try {
+        const backendState = await fetchGameState();
+        this.gameState = transformBackendToFrontend(backendState, this.currentPlayerId);
+        debugLog('Loaded game state from backend:', this.gameState);
+      } catch (error) {
+        errorLog('Failed to fetch initial game state', error);
+        this.gameState = generateDummyGameState();
+        this.useBackend = false;
+      }
+    } else {
+      this.gameState = generateDummyGameState();
+    }
 
     // Set up graphics layers
     this.hexGraphics = this.add.graphics();
@@ -57,18 +92,21 @@ export class GameScene extends Phaser.Scene {
     this.drawNodes();
     this.drawFogOfWar();
 
-    // Launch UI scene
-    this.scene.launch('UIScene');
+    // Note: UIScene is not used in hex grid mode (only in GraphGameScene)
+    // Hex grid has all UI elements built-in
 
     // Start update loop for animations
+    const config = getBackendConfig();
+    const updateDelay = this.useBackend ? config.pollingInterval : 100;
     this.time.addEvent({
-      delay: 100, // Update every 100ms
+      delay: updateDelay,
       callback: this.updateGameState,
       callbackScope: this,
       loop: true,
     });
 
     console.log('GameScene initialized with', this.gameState.nodes.size, 'nodes');
+    console.log('Backend mode:', this.useBackend ? 'ENABLED' : 'DISABLED (dummy data)');
   }
 
   private setupCamera() {
@@ -438,9 +476,22 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  private updateGameState() {
-    // Update dummy data
-    updateDummyGameState(this.gameState);
+  private async updateGameState() {
+    if (this.useBackend) {
+      // Fetch from backend
+      try {
+        const backendState = await fetchGameState();
+        this.gameState = transformBackendToFrontend(backendState, this.currentPlayerId);
+      } catch (error) {
+        errorLog('Failed to update game state from backend', error);
+        // Fall back to dummy data on error
+        this.useBackend = false;
+        this.gameState = generateDummyGameState();
+      }
+    } else {
+      // Update dummy data
+      updateDummyGameState(this.gameState);
+    }
 
     // Redraw dynamic elements
     this.drawNodes();
@@ -453,6 +504,8 @@ export class GameScene extends Phaser.Scene {
 
   update() {
     // Camera keyboard controls
+    if (!this.cursors) return; // Wait for initialization to complete
+
     const camera = this.cameras.main;
     const speed = VISUAL_CONFIG.CAMERA_PAN_SPEED / 60; // Per frame
 
@@ -473,5 +526,15 @@ export class GameScene extends Phaser.Scene {
   // Public method to access game state (for UI scene)
   getGameState(): GameState {
     return this.gameState;
+  }
+
+  // Public method to check if backend is being used
+  isUsingBackend(): boolean {
+    return this.useBackend;
+  }
+
+  // Public method to get current player ID
+  getCurrentPlayerId(): number {
+    return this.currentPlayerId;
   }
 }

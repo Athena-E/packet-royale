@@ -15,6 +15,9 @@ import {
   initiateCaptureViaEdge
 } from '../utils/graphData';
 import { COLORS, VISUAL_CONFIG, getPlayerColor, getBandwidthColor } from '../config/visualConstants';
+import { fetchGameState, pingBackend } from '../services/backendApi';
+import { transformBackendToGraph } from '../adapters/graphBackendAdapter';
+import { getBackendConfig, isBackendEnabled, debugLog, errorLog } from '../config/backend';
 
 export class GraphGameScene extends Phaser.Scene {
   private gameState!: NetworkGameState;
@@ -45,6 +48,11 @@ export class GraphGameScene extends Phaser.Scene {
   private hasDragged = false;
   private zoomKeys!: { plus: Phaser.Input.Keyboard.Key; minus: Phaser.Input.Keyboard.Key };
 
+  // Backend integration
+  private useBackend = false;
+  private backendConnected = false;
+  private currentPlayerId = 0; // Default to player 0
+
   constructor() {
     super({ key: 'GraphGameScene' });
   }
@@ -58,9 +66,36 @@ export class GraphGameScene extends Phaser.Scene {
     graphics.destroy();
   }
 
-  create() {
+  async create() {
+    // Check if backend is enabled and reachable
+    if (isBackendEnabled()) {
+      debugLog('Checking backend connection...');
+      this.backendConnected = await pingBackend();
+      this.useBackend = this.backendConnected;
+
+      if (this.backendConnected) {
+        debugLog('Backend connected successfully');
+      } else {
+        errorLog('Backend not reachable, falling back to dummy data');
+      }
+    } else {
+      debugLog('Backend disabled, using dummy data');
+    }
+
     // Initialize game state
-    this.gameState = generateNetworkGameState();
+    if (this.useBackend) {
+      try {
+        const backendState = await fetchGameState();
+        this.gameState = transformBackendToGraph(backendState, this.currentPlayerId);
+        debugLog('Loaded game state from backend:', this.gameState);
+      } catch (error) {
+        errorLog('Failed to fetch initial game state', error);
+        this.gameState = generateNetworkGameState();
+        this.useBackend = false;
+      }
+    } else {
+      this.gameState = generateNetworkGameState();
+    }
 
     // Set up graphics layers
     this.connectionGraphics = this.add.graphics();
@@ -98,14 +133,17 @@ export class GraphGameScene extends Phaser.Scene {
     console.log('✅ GraphGameScene: Listening for captureModeChanged events from UIScene');
 
     // Start update loop
+    const config = getBackendConfig();
+    const updateDelay = this.useBackend ? config.pollingInterval : 100;
     this.time.addEvent({
-      delay: 100,
+      delay: updateDelay,
       callback: this.updateGameState,
       callbackScope: this,
       loop: true,
     });
 
     console.log('GraphGameScene initialized with', this.gameState.nodes.size, 'nodes');
+    console.log('Backend mode:', this.useBackend ? 'ENABLED' : 'DISABLED (dummy data)');
   }
 
   private setupCamera() {
@@ -766,8 +804,23 @@ export class GraphGameScene extends Phaser.Scene {
     });
   }
 
-  private updateGameState() {
-    updateNetworkGameState(this.gameState);
+  private async updateGameState() {
+    if (this.useBackend) {
+      // Fetch from backend
+      try {
+        const backendState = await fetchGameState();
+        this.gameState = transformBackendToGraph(backendState, this.currentPlayerId);
+      } catch (error) {
+        errorLog('Failed to update game state from backend', error);
+        // Fall back to dummy data on error
+        this.useBackend = false;
+        this.gameState = generateNetworkGameState();
+      }
+    } else {
+      // Update dummy data
+      updateNetworkGameState(this.gameState);
+    }
+
     this.updateCapturableNodes();
     this.updateCapturableConnections();
 
@@ -784,6 +837,8 @@ export class GraphGameScene extends Phaser.Scene {
   }
 
   update() {
+    if (!this.cursors) return; // Wait for initialization to complete
+
     const camera = this.cameras.main;
     const speed = VISUAL_CONFIG.CAMERA_PAN_SPEED / 60;
 
