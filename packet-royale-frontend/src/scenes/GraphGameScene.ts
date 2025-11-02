@@ -24,7 +24,6 @@ export class GraphGameScene extends Phaser.Scene {
   private edgeGraphics!: Phaser.GameObjects.Graphics;
   private connectionGraphics!: Phaser.GameObjects.Graphics;
   private fogGraphics!: Phaser.GameObjects.Graphics;
-  private nodeLabelContainer!: Phaser.GameObjects.Container;
   private particleEmitters: Map<string, Phaser.GameObjects.Particles.ParticleEmitter> = new Map();
 
   // Game interaction
@@ -103,7 +102,6 @@ export class GraphGameScene extends Phaser.Scene {
     this.edgeGraphics = this.add.graphics();
     this.nodeGraphics = this.add.graphics();
     this.fogGraphics = this.add.graphics();
-    this.nodeLabelContainer = this.add.container(0, 0);
 
     // Set up camera
     this.setupCamera();
@@ -795,45 +793,6 @@ export class GraphGameScene extends Phaser.Scene {
       }
     });
 
-    // Draw node labels (for debugging)
-    this.drawNodeLabels();
-  }
-
-  private drawNodeLabels() {
-    // Clear existing labels
-    this.nodeLabelContainer.removeAll(true);
-
-    this.gameState.nodes.forEach((node) => {
-      if (this.fogOfWarEnabled && !node.explored) return;
-
-      // Hide enemy node labels when fog is enabled (EXCEPT enemy base)
-      if (this.fogOfWarEnabled && node.ownerId !== null && node.ownerId !== this.gameState.currentPlayerId && node.type !== 'BASE') {
-        return;
-      }
-
-      // Hide labels for nodes being captured by enemy when fog is enabled
-      if (this.fogOfWarEnabled && node.state === 'CAPTURING') {
-        const attackingEdges = Array.from(this.gameState.edges.values()).filter(
-          (e) => e.targetNodeId === node.id && e.ownerId !== this.gameState.currentPlayerId
-        );
-        if (attackingEdges.length > 0) {
-          return;
-        }
-      }
-
-      // Create text label for node ID
-      const label = this.add.text(node.position.x, node.position.y, node.id, {
-        fontSize: '10px',
-        fontFamily: 'monospace',
-        color: '#ffffff',
-        backgroundColor: '#000000',
-        padding: { x: 2, y: 1 },
-      });
-      label.setOrigin(0.5, 0.5);
-      label.setAlpha(0.7);
-
-      this.nodeLabelContainer.add(label);
-    });
   }
 
   private drawFogOfWar() {

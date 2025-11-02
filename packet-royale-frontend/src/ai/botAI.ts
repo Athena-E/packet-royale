@@ -4,7 +4,7 @@
  */
 
 import type { NetworkGameState } from '../types/graphTypes';
-import { getCapturableConnections, initiateCaptureViaEdge } from '../utils/graphData';
+import { getCapturableConnections, initiateCaptureViaEdge, canAttackEnemyBase, launchAttack } from '../utils/graphData';
 
 export interface BotConfig {
   thinkDelay: number; // Time between decisions in ms (default: 2000)
@@ -43,7 +43,17 @@ export class BotAI {
    * Core decision-making logic
    */
   private makeDecision(gameState: NetworkGameState): void {
-    // Get all capturable connections for this bot
+    // Priority 1: Check if bot can launch final attack on enemy base
+    if (canAttackEnemyBase(gameState, this.playerId)) {
+      console.log(`[Bot ${this.playerId}] 🎯 All adjacent nodes to enemy base secured! Launching final attack...`);
+      const success = launchAttack(gameState, this.playerId);
+      if (success) {
+        console.log(`[Bot ${this.playerId}] 💥 Final attack launched successfully!`);
+      }
+      return; // Exit decision-making after launching final attack
+    }
+
+    // Priority 2: Get all capturable connections for this bot
     const capturableConnections = getCapturableConnections(gameState, this.playerId);
 
     if (capturableConnections.length === 0) {

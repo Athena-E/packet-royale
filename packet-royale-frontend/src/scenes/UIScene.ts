@@ -6,10 +6,7 @@ import Phaser from "phaser";
 import type { GameState } from "../types/gameTypes";
 import type { NetworkGameState, NetworkNode } from "../types/graphTypes";
 import { COLORS } from "../config/visualConstants";
-import {
-  canAttackEnemyBase,
-  launchAttack,
-} from "../utils/graphData";
+import { canAttackEnemyBase, launchAttack } from "../utils/graphData";
 
 export class UIScene extends Phaser.Scene {
   // UI Elements
@@ -223,16 +220,11 @@ export class UIScene extends Phaser.Scene {
     this.attackButton.setAlpha(0.5); // Disabled initially
 
     // Instructions text
-    const instructions = this.add.text(
-      850,
-      buttonY - 10,
-      "DRAG: Pan | +/-: Zoom | F: Toggle Fog",
-      {
-        fontSize: "12px",
-        fontFamily: "monospace",
-        color: "#666699",
-      }
-    );
+    const instructions = this.add.text(850, buttonY - 10, "DRAG: Pan", {
+      fontSize: "12px",
+      fontFamily: "monospace",
+      color: "#666699",
+    });
     instructions.setScrollFactor(0);
   }
 
@@ -456,7 +448,7 @@ export class UIScene extends Phaser.Scene {
     yOffset += lineHeight;
 
     // State
-    const stateColor = node.state === 'CAPTURING' ? '#ffaa00' : '#99ccff';
+    const stateColor = node.state === "CAPTURING" ? "#ffaa00" : "#99ccff";
     const stateText = this.add.text(10, yOffset, `State: ${node.state}`, {
       fontSize: "14px",
       fontFamily: "monospace",
@@ -481,7 +473,8 @@ export class UIScene extends Phaser.Scene {
     yOffset += lineHeight;
 
     // Current Load (incoming bandwidth)
-    const loadColor = node.currentLoad >= node.bandwidthThreshold ? '#00ff88' : '#ff6666';
+    const loadColor =
+      node.currentLoad >= node.bandwidthThreshold ? "#00ff88" : "#ff6666";
     const loadText = this.add.text(
       10,
       yOffset,
@@ -497,7 +490,7 @@ export class UIScene extends Phaser.Scene {
     yOffset += lineHeight;
 
     // Progress bar if capturing
-    if (node.state === 'CAPTURING') {
+    if (node.state === "CAPTURING") {
       yOffset += 5;
 
       // Progress label
@@ -522,7 +515,8 @@ export class UIScene extends Phaser.Scene {
 
       // Progress bar fill
       const progressFill = this.add.graphics();
-      const fillColor = node.currentLoad >= node.bandwidthThreshold ? 0x00ff88 : 0xff6666;
+      const fillColor =
+        node.currentLoad >= node.bandwidthThreshold ? 0x00ff88 : 0xff6666;
       progressFill.fillStyle(fillColor, 0.8);
       progressFill.fillRect(10, yOffset, 280 * node.captureProgress, 20);
       this.nodeInfoPanel.add(progressFill);
@@ -536,10 +530,12 @@ export class UIScene extends Phaser.Scene {
       yOffset += 25;
 
       // Status message
-      const statusMessage = node.currentLoad >= node.bandwidthThreshold
-        ? '✓ Sufficient bandwidth'
-        : '⚠ Need more streams!';
-      const statusColor = node.currentLoad >= node.bandwidthThreshold ? '#00ff88' : '#ff6666';
+      const statusMessage =
+        node.currentLoad >= node.bandwidthThreshold
+          ? "✓ Sufficient bandwidth"
+          : "⚠ Need more streams!";
+      const statusColor =
+        node.currentLoad >= node.bandwidthThreshold ? "#00ff88" : "#ff6666";
       const statusText = this.add.text(10, yOffset, statusMessage, {
         fontSize: "12px",
         fontFamily: "monospace",
@@ -579,7 +575,9 @@ export class UIScene extends Phaser.Scene {
     // Update node info panel if a node is selected
     if (this.selectedNodeForInfo) {
       // Get updated node data from current game state
-      const updatedNode = (gameState as NetworkGameState).nodes.get(this.selectedNodeForInfo.id);
+      const updatedNode = (gameState as NetworkGameState).nodes.get(
+        this.selectedNodeForInfo.id
+      );
       if (updatedNode) {
         this.selectedNodeForInfo = updatedNode;
         this.updateNodeInfoPanel();

