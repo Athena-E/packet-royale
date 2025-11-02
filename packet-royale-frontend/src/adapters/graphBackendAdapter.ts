@@ -308,6 +308,7 @@ function transformNodes(
 
     const bandwidth = 5.0 + Math.random() * 3.0;
     const maxBandwidth = type === 'BASE' ? 20.0 : 10.0;
+    const bandwidthThreshold = Math.random() * 8 + 2; // 2-10 Gbps required to capture
 
     nodes.set(nodeId, {
       id: nodeId,
@@ -317,6 +318,8 @@ function transformNodes(
       ownerId: n.owner_id,
       bandwidth,
       maxBandwidth,
+      bandwidthThreshold,
+      currentLoad: 0, // Will be calculated from edges
       captureProgress,
       explored,
       connections: connections.get(nodeId) || [],

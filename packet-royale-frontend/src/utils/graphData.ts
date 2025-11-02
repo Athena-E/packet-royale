@@ -9,13 +9,11 @@ import { PLAYER_COLORS } from '../config/visualConstants';
 /**
  * Generate network nodes on a hexagonal grid (nodes at hex vertices)
  */
-function generateNetworkNodes(nodeCount: number, worldSize: number): Map<string, NetworkNode> {
+function generateNetworkNodes(nodeCount: number, _worldSize: number): Map<string, NetworkNode> {
   const nodes = new Map<string, NetworkNode>();
 
   // Hexagonal grid parameters
   const hexSize = 80; // Distance from center to vertex
-  const hexWidth = hexSize * 2;
-  const hexHeight = Math.sqrt(3) * hexSize;
 
   // Calculate grid dimensions to fit nodeCount
   const gridRadius = Math.ceil(Math.sqrt(nodeCount / 7)); // Approximate rings needed
@@ -47,6 +45,8 @@ function generateNetworkNodes(nodeCount: number, worldSize: number): Map<string,
         ownerId: null,
         bandwidth: Math.random() * 5 + 2,
         maxBandwidth: 10,
+        bandwidthThreshold: Math.random() * 8 + 2, // 2-10 Gbps required to capture
+        currentLoad: 0, // No incoming bandwidth initially
         captureProgress: 0,
         explored: false,
         connections: [],
@@ -90,33 +90,31 @@ function generateConnections(nodes: Map<string, NetworkNode>, maxDistance: numbe
   });
 }
 
-/**
- * Find path between two nodes using BFS
- */
-function findPath(nodes: Map<string, NetworkNode>, startId: string, endId: string): string[] {
-  const queue: { id: string; path: string[] }[] = [{ id: startId, path: [startId] }];
-  const visited = new Set<string>([startId]);
-
-  while (queue.length > 0) {
-    const { id, path } = queue.shift()!;
-
-    if (id === endId) {
-      return path;
-    }
-
-    const node = nodes.get(id);
-    if (!node) continue;
-
-    for (const neighborId of node.connections) {
-      if (!visited.has(neighborId)) {
-        visited.add(neighborId);
-        queue.push({ id: neighborId, path: [...path, neighborId] });
-      }
-    }
-  }
-
-  return [];
-}
+// Utility function to find path between two nodes using BFS (currently unused but may be needed)
+// function findPath(nodes: Map<string, NetworkNode>, startId: string, endId: string): string[] {
+//   const queue: { id: string; path: string[] }[] = [{ id: startId, path: [startId] }];
+//   const visited = new Set<string>([startId]);
+//
+//   while (queue.length > 0) {
+//     const { id, path } = queue.shift()!;
+//
+//     if (id === endId) {
+//       return path;
+//     }
+//
+//     const node = nodes.get(id);
+//     if (!node) continue;
+//
+//     for (const neighborId of node.connections) {
+//       if (!visited.has(neighborId)) {
+//         visited.add(neighborId);
+//         queue.push({ id: neighborId, path: [...path, neighborId] });
+//       }
+//     }
+//   }
+//
+//   return [];
+// }
 
 /**
  * Set up player bases and territories
@@ -222,7 +220,7 @@ function generateEdges(nodes: Map<string, NetworkNode>): Map<string, NetworkEdge
       if (!connectedNode) return;
 
       // Only create edge if both nodes are owned by same player or one is being captured
-      if (connectedNode.ownerId === node.ownerId || connectedNode.state === 'CAPTURING') {
+      if (node.ownerId !== null && (connectedNode.ownerId === node.ownerId || connectedNode.state === 'CAPTURING')) {
         const edgeId = `edge-${node.id}-${connectedId}`;
         const bandwidth = Math.random() * 5 + 3;
 
@@ -344,13 +342,15 @@ export function initiateCapture(state: NetworkGameState, nodeId: string, playerI
     .find((n) => n?.ownerId === playerId);
 
   if (adjacentOwnedNode) {
+    // Simulate user's actual network capacity (varies between 3-8 Gbps)
+    const simulatedNetworkCapacity = Math.random() * 5 + 3; // 3-8 Gbps
     const edgeId = `edge-${adjacentOwnedNode.id}-${nodeId}`;
     state.edges.set(edgeId, {
       id: edgeId,
       sourceNodeId: adjacentOwnedNode.id,
       targetNodeId: nodeId,
       ownerId: playerId,
-      bandwidth: 5,
+      bandwidth: simulatedNetworkCapacity,
       maxBandwidth: 10,
       packetsSent: 0,
       packetsLost: 0,
@@ -375,7 +375,10 @@ export function isCapturableConnection(
   const targetNode = state.nodes.get(targetNodeId);
 
   if (!sourceNode || !targetNode) return false;
-  if (!targetNode.explored) return false;
+
+  // For bots (Player 1+), allow capturing unexplored adjacent nodes
+  // For human player (Player 0), require exploration (fog of war)
+  if (playerId === 0 && !targetNode.explored) return false;
 
   // Source must be owned by player
   if (sourceNode.ownerId !== playerId) return false;
@@ -440,18 +443,22 @@ export function initiateCaptureViaEdge(
   const targetNode = state.nodes.get(targetNodeId);
   if (!targetNode) return false;
 
-  // Start capturing the target node
-  targetNode.state = 'CAPTURING';
-  targetNode.captureProgress = 0;
+  // Start capturing the target node (only reset progress if not already capturing)
+  if (targetNode.state !== 'CAPTURING') {
+    targetNode.state = 'CAPTURING';
+    targetNode.captureProgress = 0;
+  }
 
   // Create the edge from source to target
+  // Simulate user's actual network capacity (varies between 3-8 Gbps)
+  const simulatedNetworkCapacity = Math.random() * 5 + 3; // 3-8 Gbps
   const edgeId = `edge-${sourceNodeId}-${targetNodeId}`;
   state.edges.set(edgeId, {
     id: edgeId,
     sourceNodeId,
     targetNodeId,
     ownerId: playerId,
-    bandwidth: 5,
+    bandwidth: simulatedNetworkCapacity,
     maxBandwidth: 10,
     packetsSent: 0,
     packetsLost: 0,
@@ -520,38 +527,100 @@ export function updateNetworkGameState(state: NetworkGameState): void {
     }
   });
 
-  // Update node capture progress
+  // Update node current load and capture progress
   state.nodes.forEach((node) => {
+    // Calculate current load from incoming edges (attacking edges only)
+    const incomingEdges = Array.from(state.edges.values()).filter(
+      (e) => e.targetNodeId === node.id && e.active && e.ownerId !== node.ownerId
+    );
+    node.currentLoad = incomingEdges.reduce((sum, e) => sum + e.bandwidth, 0);
+
+    // Update capture progress if node is being captured
     if (node.state === 'CAPTURING') {
-      // Capture speed based on bandwidth being sent to the node
-      const incomingEdges = Array.from(state.edges.values()).filter(
-        (e) => e.targetNodeId === node.id && e.active
-      );
-      const totalBandwidth = incomingEdges.reduce((sum, e) => sum + e.bandwidth, 0);
+      const totalBandwidth = node.currentLoad;
+      const wasEnemyOwned = node.ownerId !== null; // Hostile capture if node has an owner
 
-      // Progress faster with more bandwidth (0.5% to 2% per tick)
-      const captureSpeed = Math.min(0.02, 0.005 + (totalBandwidth / 100));
-      node.captureProgress = Math.min(1, node.captureProgress + captureSpeed);
+      // Check if bandwidth meets threshold
+      if (totalBandwidth >= node.bandwidthThreshold) {
+        // Sufficient bandwidth - capture progresses
+        // Progress faster with more bandwidth (1% base + bonus for excess)
+        const excessBandwidth = totalBandwidth - node.bandwidthThreshold;
+        const captureSpeed = 0.01 + (excessBandwidth / node.bandwidthThreshold) * 0.02;
+        node.captureProgress = Math.min(1, node.captureProgress + captureSpeed);
 
-      if (node.captureProgress >= 1) {
-        // Capture complete!
-        const capturingEdge = incomingEdges[0];
-        if (capturingEdge) {
-          const previousOwner = node.ownerId;
-          node.ownerId = capturingEdge.ownerId;
-          node.type = 'OWNED';
+        if (node.captureProgress >= 1) {
+          // Capture complete!
+          const capturingEdge = incomingEdges[0];
+          if (capturingEdge) {
+            node.ownerId = capturingEdge.ownerId;
+            node.type = 'OWNED';
+            node.state = 'IDLE';
+            node.captureProgress = 0;
+
+            console.log(`✅ Node ${node.id} captured by Player ${capturingEdge.ownerId} (Threshold: ${node.bandwidthThreshold.toFixed(1)} Gbps, Load: ${totalBandwidth.toFixed(1)} Gbps)`);
+
+            // Explore adjacent nodes
+            node.connections.forEach((connId) => {
+              const connNode = state.nodes.get(connId);
+              if (connNode) {
+                connNode.explored = true;
+              }
+            });
+          }
+        }
+      } else {
+        // Insufficient bandwidth
+        if (wasEnemyOwned) {
+          // HOSTILE CAPTURE FAILED - Reflect packets and potentially destroy attacking nodes
+          console.log(`💥 Hostile capture failed on ${node.id} - Reflecting packets (${totalBandwidth.toFixed(1)}/${node.bandwidthThreshold.toFixed(1)} Gbps)`);
+
+          // Remove attacking edges and apply reflection damage
+          incomingEdges.forEach((attackEdge) => {
+            const sourceNode = state.nodes.get(attackEdge.sourceNodeId);
+            if (sourceNode) {
+              // Calculate packet loss / reflection damage (based on bandwidth sent)
+              const reflectionDamage = attackEdge.bandwidth / node.bandwidthThreshold;
+
+              // 30% base chance + additional chance based on how much bandwidth was sent
+              // More bandwidth sent = higher chance of node destruction
+              const destructionChance = 0.3 + (reflectionDamage * 0.4);
+
+              if (Math.random() < destructionChance) {
+                // Node destroyed - return to neutral state
+                console.log(`🔥 Node ${sourceNode.id} destroyed by packet reflection! (${(destructionChance * 100).toFixed(0)}% chance)`);
+                sourceNode.ownerId = null;
+                sourceNode.type = 'NEUTRAL';
+                sourceNode.state = 'IDLE';
+                sourceNode.captureProgress = 0;
+
+                // Remove all edges connected to destroyed node
+                const nodesToRemove: string[] = [];
+                state.edges.forEach((edge, edgeId) => {
+                  if (edge.sourceNodeId === sourceNode.id || edge.targetNodeId === sourceNode.id) {
+                    nodesToRemove.push(edgeId);
+                  }
+                });
+                nodesToRemove.forEach(edgeId => state.edges.delete(edgeId));
+              } else {
+                console.log(`⚡ Node ${sourceNode.id} survived packet reflection (${(destructionChance * 100).toFixed(0)}% chance)`);
+              }
+            }
+
+            // Remove the attacking edge
+            state.edges.delete(attackEdge.id);
+          });
+
+          // Reset target node state
           node.state = 'IDLE';
           node.captureProgress = 0;
+        } else {
+          // NEUTRAL NODE CAPTURE - Maintain edges and allow additional streams
+          node.captureProgress = Math.max(0, node.captureProgress - 0.005);
 
-          console.log(`✅ Node ${node.id} captured by Player ${capturingEdge.ownerId} from ${previousOwner === null ? 'neutral' : `Player ${previousOwner}`}`);
-
-          // Explore adjacent nodes
-          node.connections.forEach((connId) => {
-            const connNode = state.nodes.get(connId);
-            if (connNode) {
-              connNode.explored = true;
-            }
-          });
+          // Log insufficient bandwidth (throttled to avoid spam)
+          if (state.currentTick % 20 === 0) {
+            console.log(`⚠ Node ${node.id} - Insufficient bandwidth: ${totalBandwidth.toFixed(1)}/${node.bandwidthThreshold.toFixed(1)} Gbps (${incomingEdges.length} stream${incomingEdges.length !== 1 ? 's' : ''})`);
+          }
         }
       }
     }

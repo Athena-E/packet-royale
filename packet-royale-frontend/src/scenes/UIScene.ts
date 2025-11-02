@@ -7,7 +7,6 @@ import type { GameState } from "../types/gameTypes";
 import type { NetworkGameState, NetworkNode } from "../types/graphTypes";
 import { COLORS } from "../config/visualConstants";
 import {
-  initiateCapture,
   canAttackEnemyBase,
   launchAttack,
 } from "../utils/graphData";
@@ -26,8 +25,11 @@ export class UIScene extends Phaser.Scene {
   private topBar!: Phaser.GameObjects.Graphics;
   private bottomBar!: Phaser.GameObjects.Graphics;
 
+  // Node info panel
+  private nodeInfoPanel!: Phaser.GameObjects.Container;
+  private selectedNodeForInfo: NetworkNode | null = null;
+
   // Game state
-  private selectedNode: NetworkNode | null = null;
   private gameState: NetworkGameState | null = null;
   private captureMode: boolean = false;
 
@@ -52,6 +54,9 @@ export class UIScene extends Phaser.Scene {
     // Create scanline effect
     this.createScanlineEffect();
 
+    // Create node info panel
+    this.createNodeInfoPanel();
+
     // Listen for game state updates
     const gameScene = this.scene.get("GraphGameScene");
     gameScene.events.on("gameStateUpdated", this.updateUI, this);
@@ -62,7 +67,8 @@ export class UIScene extends Phaser.Scene {
   }
 
   private onNodeSelected(node: NetworkNode) {
-    this.selectedNode = node;
+    this.selectedNodeForInfo = node;
+    this.updateNodeInfoPanel();
     this.updateButtonStates();
   }
 
@@ -370,6 +376,181 @@ export class UIScene extends Phaser.Scene {
     });
   }
 
+  private createNodeInfoPanel() {
+    const { width } = this.cameras.main;
+
+    // Create container for node info
+    this.nodeInfoPanel = this.add.container(width - 320, 80);
+    this.nodeInfoPanel.setScrollFactor(0);
+    this.nodeInfoPanel.setVisible(false);
+
+    // Background panel
+    const panelBg = this.add.graphics();
+    panelBg.fillStyle(0x000000, 0.8);
+    panelBg.fillRect(0, 0, 300, 280);
+    panelBg.lineStyle(2, COLORS.UI_PRIMARY, 0.8);
+    panelBg.strokeRect(0, 0, 300, 280);
+    this.nodeInfoPanel.add(panelBg);
+
+    // Title
+    const title = this.add.text(10, 10, "NODE INFO", {
+      fontSize: "18px",
+      fontFamily: "monospace",
+      color: "#00ffff",
+      fontStyle: "bold",
+    });
+    this.nodeInfoPanel.add(title);
+
+    this.nodeInfoPanel.setDepth(100);
+  }
+
+  private updateNodeInfoPanel() {
+    if (!this.selectedNodeForInfo) {
+      this.nodeInfoPanel.setVisible(false);
+      return;
+    }
+
+    const node = this.selectedNodeForInfo;
+
+    // Clear previous content (except background and title which are first 2 items)
+    while (this.nodeInfoPanel.length > 2) {
+      const item = this.nodeInfoPanel.getAt(2);
+      if (item) {
+        item.destroy();
+      }
+    }
+
+    let yOffset = 40;
+    const lineHeight = 22;
+
+    // Node ID
+    const idText = this.add.text(10, yOffset, `ID: ${node.id}`, {
+      fontSize: "14px",
+      fontFamily: "monospace",
+      color: "#99ccff",
+    });
+    this.nodeInfoPanel.add(idText);
+    yOffset += lineHeight;
+
+    // Type
+    const typeText = this.add.text(10, yOffset, `Type: ${node.type}`, {
+      fontSize: "14px",
+      fontFamily: "monospace",
+      color: "#99ccff",
+    });
+    this.nodeInfoPanel.add(typeText);
+    yOffset += lineHeight;
+
+    // Owner
+    const ownerText = this.add.text(
+      10,
+      yOffset,
+      `Owner: ${node.ownerId !== null ? `Player ${node.ownerId}` : "Neutral"}`,
+      {
+        fontSize: "14px",
+        fontFamily: "monospace",
+        color: "#99ccff",
+      }
+    );
+    this.nodeInfoPanel.add(ownerText);
+    yOffset += lineHeight;
+
+    // State
+    const stateColor = node.state === 'CAPTURING' ? '#ffaa00' : '#99ccff';
+    const stateText = this.add.text(10, yOffset, `State: ${node.state}`, {
+      fontSize: "14px",
+      fontFamily: "monospace",
+      color: stateColor,
+    });
+    this.nodeInfoPanel.add(stateText);
+    yOffset += lineHeight + 10;
+
+    // Bandwidth Threshold (required to capture)
+    const thresholdText = this.add.text(
+      10,
+      yOffset,
+      `Threshold: ${node.bandwidthThreshold.toFixed(1)} Gbps`,
+      {
+        fontSize: "14px",
+        fontFamily: "monospace",
+        color: "#00ff88",
+        fontStyle: "bold",
+      }
+    );
+    this.nodeInfoPanel.add(thresholdText);
+    yOffset += lineHeight;
+
+    // Current Load (incoming bandwidth)
+    const loadColor = node.currentLoad >= node.bandwidthThreshold ? '#00ff88' : '#ff6666';
+    const loadText = this.add.text(
+      10,
+      yOffset,
+      `Current Load: ${node.currentLoad.toFixed(1)} Gbps`,
+      {
+        fontSize: "14px",
+        fontFamily: "monospace",
+        color: loadColor,
+        fontStyle: "bold",
+      }
+    );
+    this.nodeInfoPanel.add(loadText);
+    yOffset += lineHeight;
+
+    // Progress bar if capturing
+    if (node.state === 'CAPTURING') {
+      yOffset += 5;
+
+      // Progress label
+      const progressLabel = this.add.text(
+        10,
+        yOffset,
+        `Progress: ${(node.captureProgress * 100).toFixed(0)}%`,
+        {
+          fontSize: "14px",
+          fontFamily: "monospace",
+          color: "#ffaa00",
+        }
+      );
+      this.nodeInfoPanel.add(progressLabel);
+      yOffset += lineHeight;
+
+      // Progress bar background
+      const progressBg = this.add.graphics();
+      progressBg.fillStyle(0x333333, 1);
+      progressBg.fillRect(10, yOffset, 280, 20);
+      this.nodeInfoPanel.add(progressBg);
+
+      // Progress bar fill
+      const progressFill = this.add.graphics();
+      const fillColor = node.currentLoad >= node.bandwidthThreshold ? 0x00ff88 : 0xff6666;
+      progressFill.fillStyle(fillColor, 0.8);
+      progressFill.fillRect(10, yOffset, 280 * node.captureProgress, 20);
+      this.nodeInfoPanel.add(progressFill);
+
+      // Progress bar border
+      const progressBorder = this.add.graphics();
+      progressBorder.lineStyle(2, COLORS.UI_PRIMARY, 0.6);
+      progressBorder.strokeRect(10, yOffset, 280, 20);
+      this.nodeInfoPanel.add(progressBorder);
+
+      yOffset += 25;
+
+      // Status message
+      const statusMessage = node.currentLoad >= node.bandwidthThreshold
+        ? '✓ Sufficient bandwidth'
+        : '⚠ Need more streams!';
+      const statusColor = node.currentLoad >= node.bandwidthThreshold ? '#00ff88' : '#ff6666';
+      const statusText = this.add.text(10, yOffset, statusMessage, {
+        fontSize: "12px",
+        fontFamily: "monospace",
+        color: statusColor,
+      });
+      this.nodeInfoPanel.add(statusText);
+    }
+
+    this.nodeInfoPanel.setVisible(true);
+  }
+
   private updateUI(gameState: GameState | NetworkGameState) {
     this.gameState = gameState as NetworkGameState;
 
@@ -393,6 +574,16 @@ export class UIScene extends Phaser.Scene {
       this.enemyNodeCountText.setText(
         `NODES: ${enemy.nodesOwned}/${enemy.maxNodes}`
       );
+    }
+
+    // Update node info panel if a node is selected
+    if (this.selectedNodeForInfo) {
+      // Get updated node data from current game state
+      const updatedNode = (gameState as NetworkGameState).nodes.get(this.selectedNodeForInfo.id);
+      if (updatedNode) {
+        this.selectedNodeForInfo = updatedNode;
+        this.updateNodeInfoPanel();
+      }
     }
 
     // Update button states

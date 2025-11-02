@@ -8,8 +8,6 @@ import {
   generateNetworkGameState,
   updateNetworkGameState,
   getCapturableNodes,
-  initiateCapture,
-  canCaptureNode,
   getCapturableConnections,
   isCapturableConnection,
   initiateCaptureViaEdge
@@ -18,6 +16,7 @@ import { COLORS, VISUAL_CONFIG, getPlayerColor, getBandwidthColor } from '../con
 import { fetchGameState, pingBackend } from '../services/backendApi';
 import { transformBackendToGraph } from '../adapters/graphBackendAdapter';
 import { getBackendConfig, isBackendEnabled, debugLog, errorLog } from '../config/backend';
+import { BotAI } from '../ai/botAI';
 
 export class GraphGameScene extends Phaser.Scene {
   private gameState!: NetworkGameState;
@@ -29,7 +28,6 @@ export class GraphGameScene extends Phaser.Scene {
   private particleEmitters: Map<string, Phaser.GameObjects.Particles.ParticleEmitter> = new Map();
 
   // Game interaction
-  private selectedNode: NetworkNode | null = null;
   private capturableNodes: NetworkNode[] = [];
   private capturableConnections: Array<{ sourceNodeId: string; targetNodeId: string }> = [];
   private captureMode: boolean = false;
@@ -52,6 +50,9 @@ export class GraphGameScene extends Phaser.Scene {
   private useBackend = false;
   private backendConnected = false;
   private currentPlayerId = 0; // Default to player 0
+
+  // Bot AI
+  private botAI!: BotAI;
 
   constructor() {
     super({ key: 'GraphGameScene' });
@@ -116,6 +117,12 @@ export class GraphGameScene extends Phaser.Scene {
     this.drawNodes();
     this.drawFogOfWar();
 
+    // Initialize bot AI for enemy player (Player 1)
+    this.botAI = new BotAI(1, {
+      thinkDelay: 2000, // Think every 2 seconds
+      aggressiveness: 0.6, // Moderate aggressiveness
+    });
+
     // Launch UI scene
     this.scene.launch('UIScene');
 
@@ -157,7 +164,7 @@ export class GraphGameScene extends Phaser.Scene {
 
     // Zoom keys (+ and - or = and -)
     this.zoomKeys = {
-      plus: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.EQUALS),
+      plus: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.PLUS),
       minus: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.MINUS),
     };
 
@@ -244,6 +251,21 @@ export class GraphGameScene extends Phaser.Scene {
     this.gameState.nodes.forEach((node) => {
       if (this.fogOfWarEnabled && !node.explored) return;
 
+      // Hide enemy nodes from hover detection when fog is enabled (EXCEPT enemy base)
+      if (this.fogOfWarEnabled && node.ownerId !== null && node.ownerId !== this.gameState.currentPlayerId && node.type !== 'BASE') {
+        return;
+      }
+
+      // Hide nodes being captured by enemy from hover detection when fog is enabled
+      if (this.fogOfWarEnabled && node.state === 'CAPTURING') {
+        const attackingEdges = Array.from(this.gameState.edges.values()).filter(
+          (e) => e.targetNodeId === node.id && e.ownerId !== this.gameState.currentPlayerId
+        );
+        if (attackingEdges.length > 0) {
+          return;
+        }
+      }
+
       const radius = node.type === 'BASE' ? VISUAL_CONFIG.NODE_BASE_RADIUS * 1.5 : VISUAL_CONFIG.NODE_OWNED_RADIUS * 1.5;
       const distance = Math.sqrt(
         Math.pow(worldX - node.position.x, 2) + Math.pow(worldY - node.position.y, 2)
@@ -291,6 +313,21 @@ export class GraphGameScene extends Phaser.Scene {
     this.gameState.nodes.forEach((node) => {
       if (this.fogOfWarEnabled && !node.explored) return;
 
+      // Hide enemy nodes from click detection when fog is enabled (EXCEPT enemy base)
+      if (this.fogOfWarEnabled && node.ownerId !== null && node.ownerId !== this.gameState.currentPlayerId && node.type !== 'BASE') {
+        return;
+      }
+
+      // Hide nodes being captured by enemy from click detection when fog is enabled
+      if (this.fogOfWarEnabled && node.state === 'CAPTURING') {
+        const attackingEdges = Array.from(this.gameState.edges.values()).filter(
+          (e) => e.targetNodeId === node.id && e.ownerId !== this.gameState.currentPlayerId
+        );
+        if (attackingEdges.length > 0) {
+          return;
+        }
+      }
+
       // Use larger click radius for better UX (2.5x instead of 1.5x)
       const radius = node.type === 'BASE' ? VISUAL_CONFIG.NODE_BASE_RADIUS * 2.5 : VISUAL_CONFIG.NODE_OWNED_RADIUS * 2.5;
       const distance = Math.sqrt(
@@ -328,8 +365,7 @@ export class GraphGameScene extends Phaser.Scene {
                 'at position:', `(${node.position.x.toFixed(1)}, ${node.position.y.toFixed(1)})`,
                 'Type:', node.type, 'Owner:', node.ownerId);
 
-    // Select the node
-    this.selectedNode = node;
+    // Emit node selected event
     this.events.emit('nodeSelected', node);
 
     // Visual feedback
@@ -485,52 +521,6 @@ export class GraphGameScene extends Phaser.Scene {
     this.capturableConnections = getCapturableConnections(this.gameState, this.gameState.currentPlayerId);
   }
 
-  private attemptCapture(node: NetworkNode) {
-    const playerId = this.gameState.currentPlayerId;
-
-    // Check if node can be captured
-    if (!canCaptureNode(this.gameState, node.id, playerId)) {
-      // Determine why it can't be captured
-      let reason = 'Cannot capture this node';
-
-      if (!node.explored) {
-        reason = 'Cannot capture this node - not explored yet';
-      } else if (node.ownerId === playerId) {
-        reason = 'Cannot capture this node - you already own it';
-      } else if (node.state === 'CAPTURING') {
-        reason = 'Cannot capture this node - already being captured';
-      } else {
-        reason = 'Cannot capture this node - must be adjacent to your territory';
-      }
-
-      this.events.emit('captureAttempted', {
-        success: false,
-        message: reason,
-      });
-      return;
-    }
-
-    // Attempt to initiate capture
-    const success = initiateCapture(this.gameState, node.id, playerId);
-
-    if (success) {
-      this.events.emit('captureAttempted', {
-        success: true,
-        message: `Initiating capture of node ${node.id}`,
-      });
-
-      // Update visuals immediately
-      this.updateCapturableNodes();
-      this.drawNodes();
-      this.drawEdges();
-    } else {
-      this.events.emit('captureAttempted', {
-        success: false,
-        message: 'Failed to initiate capture',
-      });
-    }
-  }
-
   private drawConnections() {
     this.connectionGraphics.clear();
 
@@ -538,10 +528,30 @@ export class GraphGameScene extends Phaser.Scene {
     this.gameState.nodes.forEach((node) => {
       if (this.fogOfWarEnabled && !node.explored) return;
 
+      // Hide connections from enemy nodes when fog is enabled (EXCEPT enemy base)
+      if (this.fogOfWarEnabled && node.ownerId !== null && node.ownerId !== this.gameState.currentPlayerId && node.type !== 'BASE') {
+        return;
+      }
+
       node.connections.forEach((connectedId) => {
         const connectedNode = this.gameState.nodes.get(connectedId);
         if (!connectedNode) return;
         if (this.fogOfWarEnabled && !connectedNode.explored) return;
+
+        // Hide connections to enemy nodes when fog is enabled (EXCEPT enemy base)
+        if (this.fogOfWarEnabled && connectedNode.ownerId !== null && connectedNode.ownerId !== this.gameState.currentPlayerId && connectedNode.type !== 'BASE') {
+          return;
+        }
+
+        // Hide connections to nodes being captured by enemy when fog is enabled
+        if (this.fogOfWarEnabled && connectedNode.state === 'CAPTURING') {
+          const attackingEdges = Array.from(this.gameState.edges.values()).filter(
+            (e) => e.targetNodeId === connectedNode.id && e.ownerId !== this.gameState.currentPlayerId
+          );
+          if (attackingEdges.length > 0) {
+            return;
+          }
+        }
 
         // Only draw if not an active edge
         const hasActiveEdge = Array.from(this.gameState.edges.values()).some(
@@ -593,6 +603,11 @@ export class GraphGameScene extends Phaser.Scene {
 
       if (!sourceNode || !targetNode) return;
       if (this.fogOfWarEnabled && (!sourceNode.explored || !targetNode.explored)) {
+        return;
+      }
+
+      // Hide enemy edges when fog is enabled (only show player's own edges)
+      if (this.fogOfWarEnabled && edge.ownerId !== this.gameState.currentPlayerId) {
         return;
       }
 
@@ -689,7 +704,24 @@ export class GraphGameScene extends Phaser.Scene {
     this.nodeGraphics.clear();
 
     this.gameState.nodes.forEach((node) => {
+      // Hide unexplored nodes when fog is enabled
       if (this.fogOfWarEnabled && !node.explored) return;
+
+      // Hide enemy-owned nodes when fog is enabled (EXCEPT enemy base - always show bases)
+      if (this.fogOfWarEnabled && node.ownerId !== null && node.ownerId !== this.gameState.currentPlayerId && node.type !== 'BASE') {
+        return;
+      }
+
+      // Hide nodes being captured by enemy when fog is enabled
+      if (this.fogOfWarEnabled && node.state === 'CAPTURING') {
+        // Check if any attacking edge is from an enemy
+        const attackingEdges = Array.from(this.gameState.edges.values()).filter(
+          (e) => e.targetNodeId === node.id && e.ownerId !== this.gameState.currentPlayerId
+        );
+        if (attackingEdges.length > 0) {
+          return;
+        }
+      }
 
       const time = this.time.now;
       const pulse = Math.sin((time / VISUAL_CONFIG.PULSE_SPEED) * Math.PI * 2) * 0.3 + 0.7;
@@ -774,6 +806,21 @@ export class GraphGameScene extends Phaser.Scene {
     this.gameState.nodes.forEach((node) => {
       if (this.fogOfWarEnabled && !node.explored) return;
 
+      // Hide enemy node labels when fog is enabled (EXCEPT enemy base)
+      if (this.fogOfWarEnabled && node.ownerId !== null && node.ownerId !== this.gameState.currentPlayerId && node.type !== 'BASE') {
+        return;
+      }
+
+      // Hide labels for nodes being captured by enemy when fog is enabled
+      if (this.fogOfWarEnabled && node.state === 'CAPTURING') {
+        const attackingEdges = Array.from(this.gameState.edges.values()).filter(
+          (e) => e.targetNodeId === node.id && e.ownerId !== this.gameState.currentPlayerId
+        );
+        if (attackingEdges.length > 0) {
+          return;
+        }
+      }
+
       // Create text label for node ID
       const label = this.add.text(node.position.x, node.position.y, node.id, {
         fontSize: '10px',
@@ -805,6 +852,17 @@ export class GraphGameScene extends Phaser.Scene {
   }
 
   private async updateGameState() {
+    // Track node states before update (track ALL nodes for destruction detection)
+    const previousStates = new Map<string, { state: string; ownerId: number | null; currentLoad: number; type: string }>();
+    this.gameState.nodes.forEach((node) => {
+      previousStates.set(node.id, {
+        state: node.state,
+        ownerId: node.ownerId,
+        currentLoad: node.currentLoad,
+        type: node.type
+      });
+    });
+
     if (this.useBackend) {
       // Fetch from backend
       try {
@@ -819,7 +877,43 @@ export class GraphGameScene extends Phaser.Scene {
     } else {
       // Update dummy data
       updateNetworkGameState(this.gameState);
+
+      // Let bot AI make decisions (only in local/dummy mode)
+      this.botAI.think(this.gameState, this.time.now);
     }
+
+    // Check for capture status changes and show alerts
+    previousStates.forEach((prevState, nodeId) => {
+      const node = this.gameState.nodes.get(nodeId);
+      if (!node) return;
+
+      // Node was destroyed (owned -> neutral)
+      if (prevState.ownerId !== null && node.ownerId === null && prevState.type === 'OWNED' && node.type === 'NEUTRAL') {
+        this.showNodeAlert(nodeId, '🔥 DESTROYED', false);
+      }
+      // Hostile capture failed (was capturing enemy node, now idle with no owner change)
+      else if (prevState.state === 'CAPTURING' && node.state === 'IDLE' && prevState.ownerId !== null && node.ownerId === prevState.ownerId) {
+        this.showNodeAlert(nodeId, '💥 ATTACK FAILED', false);
+      }
+      // Node was captured (owner changed)
+      else if (node.ownerId !== prevState.ownerId && node.state === 'IDLE' && prevState.state === 'CAPTURING') {
+        this.showNodeAlert(nodeId, '✓ CAPTURED', true);
+      }
+      // Node is being captured with sufficient bandwidth
+      else if (node.state === 'CAPTURING' && node.currentLoad >= node.bandwidthThreshold) {
+        if (prevState.currentLoad < node.bandwidthThreshold) {
+          // Just crossed threshold
+          this.showNodeAlert(nodeId, `📡 CAPTURING (${node.currentLoad.toFixed(1)}/${node.bandwidthThreshold.toFixed(1)} Gbps)`, true);
+        }
+      }
+      // Node has insufficient bandwidth (only for neutral captures)
+      else if (node.state === 'CAPTURING' && node.currentLoad < node.bandwidthThreshold && node.ownerId === null) {
+        if (prevState.currentLoad >= node.bandwidthThreshold || prevState.currentLoad === 0) {
+          // Just dropped below threshold or first attempt
+          this.showNodeAlert(nodeId, `⚠ NEED MORE (${node.currentLoad.toFixed(1)}/${node.bandwidthThreshold.toFixed(1)} Gbps)`, false);
+        }
+      }
+    });
 
     this.updateCapturableNodes();
     this.updateCapturableConnections();
@@ -834,6 +928,44 @@ export class GraphGameScene extends Phaser.Scene {
     this.drawFogOfWar();
 
     this.events.emit('gameStateUpdated', this.gameState);
+  }
+
+  /**
+   * Show a floating alert on a node
+   */
+  private showNodeAlert(nodeId: string, message: string, isSuccess: boolean): void {
+    const node = this.gameState.nodes.get(nodeId);
+    if (!node) return;
+
+    const alertText = this.add.text(node.position.x, node.position.y - 40, message, {
+      fontSize: '14px',
+      fontFamily: 'monospace',
+      color: isSuccess ? '#00ff88' : '#ff3333',
+      backgroundColor: isSuccess ? '#003311' : '#330011',
+      padding: { x: 8, y: 4 },
+    });
+    alertText.setOrigin(0.5);
+    alertText.setAlpha(0);
+
+    // Animate: fade in, float up, fade out
+    this.tweens.add({
+      targets: alertText,
+      alpha: 1,
+      y: node.position.y - 60,
+      duration: 300,
+      ease: 'Power2',
+      onComplete: () => {
+        this.tweens.add({
+          targets: alertText,
+          alpha: 0,
+          y: node.position.y - 80,
+          duration: 500,
+          delay: 1000,
+          ease: 'Power2',
+          onComplete: () => alertText.destroy(),
+        });
+      },
+    });
   }
 
   update() {

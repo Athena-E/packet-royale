@@ -10,6 +10,8 @@ export interface NetworkNode {
   ownerId: number | null; // null = neutral
   bandwidth: number;
   maxBandwidth: number;
+  bandwidthThreshold: number; // Minimum total incoming bandwidth (Gbps) required to capture this node
+  currentLoad: number; // Current total incoming bandwidth (Gbps) from active edges
   captureProgress: number;
   explored: boolean;
   connections: string[]; // IDs of connected nodes
